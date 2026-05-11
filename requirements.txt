@@ -1,0 +1,2 @@
+# Currently uses only the Python standard library.
+# Add GUI/packaging or matching libraries here as needed.
