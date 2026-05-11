@@ -1,25 +1,17 @@
 #!/usr/bin/env python3
-"""Core batch engine for converting Downie JSON into Stash scene import bundles.
-
-This module is used by both the CLI and GUI frontends. It:
-- parses Downie metadata JSON files from a root folder
-- scans one or more media roots for video files
-- matches JSON records to media files using filename + title heuristics
-- emits Stash-compatible scene JSON files into an output bundle
-
-Stash import docs: https://docs.stashapp.cc/in-app-manual/tasks/jsonspec/
-"""
+"""Core batch engine for converting Downie JSON into Stash scene import bundles."""
 
 from __future__ import annotations
 
 import json
 import re
 from collections import defaultdict
-from dataclasses import dataclass, asdict
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any
 
 VIDEO_EXTS = {
     ".mp4",
@@ -49,12 +41,11 @@ SITE_NOISE = {
 
 def normalize_text(value: str) -> str:
     """Lowercase, strip punctuation/URLs, remove common noise tokens."""
-    value = value or ""
-    value = value.lower()
-    value = value.replace("&", " and ")
-    value = re.sub(r"https?://", " ", value)
-    value = re.sub(r"[^a-z0-9]+", " ", value)
-    tokens = [t for t in value.split() if t and t not in SITE_NOISE]
+    normalized = value.lower()
+    normalized = normalized.replace("&", " and ")
+    normalized = re.sub(r"https?://", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    tokens = [token for token in normalized.split() if token and token not in SITE_NOISE]
     return " ".join(tokens).strip()
 
 
@@ -66,37 +57,36 @@ def clean_title(title: str) -> str:
     """Clean noisy Downie titles into something usable as a scene title."""
     if not title:
         return "Untitled"
-    t = re.sub(r"\s+", " ", title).strip()
-    # Strip repeated JustTheGays boilerplate
-    t = re.sub(
+    cleaned = re.sub(r"\s+", " ", title).strip()
+    cleaned = re.sub(
         r"\s+-\s+\|\s+JustTheGays(?:\s+-\s+justthegays\.tv)+$",
         "",
-        t,
-        flags=re.I,
+        cleaned,
+        flags=re.IGNORECASE,
     )
-    t = re.sub(r"(?:\s*-\s*justthegays\.tv)+$", "", t, flags=re.I)
-    t = re.sub(r"\s+-\s+\|\s*$", "", t)
-    return t.strip(" -|") or "Untitled"
+    cleaned = re.sub(r"(?:\s*-\s*justthegays\.tv)+$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+-\s+\|\s*$", "", cleaned)
+    return cleaned.strip(" -|") or "Untitled"
 
 
 def sanitize_filename(name: str) -> str:
     """Make a safe filename based on the title."""
-    name = re.sub(r'[\\/:*?"<>|]+', "-", name)
-    name = re.sub(r"\s+", " ", name).strip()
-    return (name[:180] or "scene").rstrip(". ")
+    sanitized = re.sub(r'[\\/:*?"<>|]+', "-", name)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    return (sanitized[:180] or "scene").rstrip(". ")
 
 
-def extract_date(meta: dict) -> Optional[str]:
+def extract_date(meta: Mapping[str, Any]) -> str | None:
     """Pull a date string from Downie metadata, normalized to YYYY-MM-DD."""
     for key in ("creationDate", "prepareDate"):
-        value = meta.get(key)
-        if not value:
+        raw_value = meta.get(key)
+        if not raw_value:
+            continue
+        if not isinstance(raw_value, str):
             continue
         try:
-            return datetime.fromisoformat(
-                value.replace("Z", "+00:00")
-            ).date().isoformat()
-        except Exception:
+            return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
             continue
     return None
 
@@ -109,10 +99,10 @@ class DownieRecord:
     title_clean: str
     title_norm: str
     stem_norm: str
-    referer: Optional[str]
-    media_url: Optional[str]
-    preview_image: Optional[str]
-    date: Optional[str]
+    referer: str | None
+    media_url: str | None
+    preview_image: str | None
+    date: str | None
 
 
 @dataclass
@@ -135,9 +125,9 @@ class MatchResult:
     reason: str
     score: float
     title: str
-    scene_url: Optional[str]
-    video_path: Optional[str]
-    output_json: Optional[str]
+    scene_url: str | None
+    video_path: str | None
+    output_json: str | None
     candidate_count: int
 
 
@@ -172,22 +162,14 @@ class MediaIndex:
             if len(token) >= 3:
                 self.by_tokens[token].append(record)
 
-    def build_from_roots(
-        self,
-        roots: list[Path],
-        log: Callable[[str], None],
-    ) -> None:
+    def build_from_roots(self, roots: list[Path], log: Callable[[str], None]) -> None:
         for root in roots:
             log(f"Scanning media root: {root}")
             for path in root.rglob("*"):
                 if not path.is_file() or path.suffix.lower() not in VIDEO_EXTS:
                     continue
                 parent = path.parent.name
-                grandparent = (
-                    path.parent.parent.name
-                    if path.parent.parent != path.parent
-                    else ""
-                )
+                grandparent = path.parent.parent.name if path.parent.parent != path.parent else ""
                 record = MediaRecord(
                     path=str(path.resolve()),
                     stem=path.stem,
@@ -203,17 +185,35 @@ class MediaIndex:
         log(f"Indexed {len(self.records)} media files")
 
 
-def parse_downie_json(path: Path) -> Optional[DownieRecord]:
+def _as_optional_str(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def parse_downie_json(path: Path) -> DownieRecord | None:
     """Parse a Downie metadata JSON file into an internal record."""
     try:
-        meta = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
         return None
+    if not isinstance(raw, dict):
+        return None
+
+    meta: Mapping[str, Any] = raw
     dtype = str(meta.get("__type", ""))
     if dtype and "Downie" not in dtype:
         return None
-    title_raw = meta.get("title") or path.stem
+
+    title_raw_value = _as_optional_str(meta.get("title"))
+    title_raw = title_raw_value or path.stem
     title_clean = clean_title(title_raw)
+    referer = (
+        _as_optional_str(meta.get("referer"))
+        or _as_optional_str(meta.get("webpage_url"))
+        or _as_optional_str(meta.get("sourceURL"))
+    )
+
     return DownieRecord(
         json_path=str(path.resolve()),
         stem=path.stem,
@@ -221,19 +221,14 @@ def parse_downie_json(path: Path) -> Optional[DownieRecord]:
         title_clean=title_clean,
         title_norm=normalize_text(title_clean),
         stem_norm=normalize_text(path.stem),
-        referer=meta.get("referer")
-        or meta.get("webpage_url")
-        or meta.get("sourceURL"),
-        media_url=meta.get("url"),
-        preview_image=meta.get("previewImageURL"),
+        referer=referer,
+        media_url=_as_optional_str(meta.get("url")),
+        preview_image=_as_optional_str(meta.get("previewImageURL")),
         date=extract_date(meta),
     )
 
 
-def score_candidate(
-    downie: DownieRecord,
-    media: MediaRecord,
-) -> tuple[float, list[str]]:
+def score_candidate(downie: DownieRecord, media: MediaRecord) -> tuple[float, list[str]]:
     """Compute a heuristic match score between a Downie record and a media file."""
     score = 0.0
     reasons: list[str] = []
@@ -246,28 +241,24 @@ def score_candidate(
         score += 55
         reasons.append("exact normalized title match")
 
-    title_ratio = SequenceMatcher(
-        None, downie.title_norm, media.stem_norm
-    ).ratio()
-    stem_ratio = SequenceMatcher(
-        None, downie.stem_norm, media.stem_norm
-    ).ratio()
+    title_ratio = SequenceMatcher(None, downie.title_norm, media.stem_norm).ratio()
+    stem_ratio = SequenceMatcher(None, downie.stem_norm, media.stem_norm).ratio()
     best_ratio = max(title_ratio, stem_ratio)
     score += best_ratio * 30
     if best_ratio >= 0.75:
         reasons.append(f"strong similarity {best_ratio:.2f}")
 
-    dtokens = tokenize(downie.title_clean) | tokenize(downie.stem)
-    mtokens = tokenize(media.stem)
-    if dtokens and mtokens:
-        overlap = len(dtokens & mtokens)
-        union = len(dtokens | mtokens)
-        jaccard = overlap / union if union else 0
+    downie_tokens = tokenize(downie.title_clean) | tokenize(downie.stem)
+    media_tokens = tokenize(media.stem)
+    if downie_tokens and media_tokens:
+        overlap = len(downie_tokens & media_tokens)
+        union = len(downie_tokens | media_tokens)
+        jaccard = overlap / union if union else 0.0
         score += jaccard * 20
         if overlap:
             reasons.append(f"token overlap {overlap}")
 
-    hint_tokens = set()
+    hint_tokens: set[str] = set()
     if downie.referer:
         hint_tokens |= tokenize(downie.referer)
     if hint_tokens & tokenize(media.parent_name):
@@ -278,9 +269,12 @@ def score_candidate(
         reasons.append("grandparent folder hint")
 
     if media.size > 50 * 1024 * 1024:
-        score += 2  # prefer non-tiny files
+        score += 2
 
     return score, reasons
+
+
+ScoredCandidate = tuple[float, MediaRecord, list[str]]
 
 
 def choose_best_match(
@@ -288,20 +282,17 @@ def choose_best_match(
     candidates: list[MediaRecord],
     min_score: float,
     ambiguity_gap: float,
-) -> tuple[
-    Optional[tuple[float, MediaRecord, list[str]]],
-    Optional[str],
-    list[tuple[float, MediaRecord, list[str]]],
-]:
+) -> tuple[ScoredCandidate | None, str | None, list[ScoredCandidate]]:
     """Choose the best candidate, enforcing thresholds for quality and ambiguity."""
     if not candidates:
         return None, "no candidates", []
 
-    scored: list[tuple[float, MediaRecord, list[str]]] = []
-    for cand in candidates:
-        score, reasons = score_candidate(downie, cand)
-        scored.append((score, cand, reasons))
-    scored.sort(key=lambda x: x[0], reverse=True)
+    scored: list[ScoredCandidate] = []
+    for candidate in candidates:
+        score, reasons = score_candidate(downie, candidate)
+        scored.append((score, candidate, reasons))
+    scored.sort(key=lambda item: item[0], reverse=True)
+
     top = scored[0]
     second = scored[1] if len(scored) > 1 else None
 
@@ -320,10 +311,10 @@ def build_scene_payload(
     include_date: bool,
     details_text: str,
     allow_stream_url: bool,
-) -> dict:
+) -> dict[str, object]:
     """Build a Stash scene JSON payload from a Downie record + matched media."""
     scene_url = downie.referer or (downie.media_url if allow_stream_url else None)
-    payload: dict = {
+    payload: dict[str, object] = {
         "title": downie.title_clean,
         "url": scene_url,
         "files": [matched_media.path],
@@ -341,58 +332,50 @@ def find_candidates(index: MediaIndex, downie: DownieRecord) -> list[MediaRecord
 
     def push(items: list[MediaRecord]) -> None:
         for item in items:
-            key = item.path
-            if key not in seen:
-                seen.add(key)
-                candidates.append(item)
+            if item.path in seen:
+                continue
+            seen.add(item.path)
+            candidates.append(item)
 
     if downie.stem_norm in index.by_stem:
         push(index.by_stem[downie.stem_norm])
 
     title_tokens = tokenize(downie.title_clean)
     stem_tokens = tokenize(downie.stem)
-    combined_tokens = {t for t in (title_tokens | stem_tokens) if len(t) >= 4}
+    combined_tokens = {token for token in (title_tokens | stem_tokens) if len(token) >= 4}
     for token in combined_tokens:
         push(index.by_tokens.get(token, []))
 
     if len(candidates) < 10:
-        for rec in index.records:
-            if rec.stem_norm and (
-                rec.stem_norm in downie.title_norm
-                or downie.title_norm in rec.stem_norm
+        for record in index.records:
+            if record.stem_norm and (
+                record.stem_norm in downie.title_norm or downie.title_norm in record.stem_norm
             ):
-                push([rec])
+                push([record])
                 if len(candidates) >= 50:
                     break
 
     return candidates[:200]
 
 
-def run_conversion(config: ConversionConfig, log: Callable[[str], None]) -> dict:
-    """Main entrypoint: perform the full conversion based on config.
-
-    - Validates paths
-    - Parses Downie JSON
-    - Indexes media
-    - Matches & writes Stash scene JSON files (unless dry_run=True)
-    - Writes report.json, unmatched.json, ambiguous.json
-    """
+def run_conversion(config: ConversionConfig, log: Callable[[str], None]) -> dict[str, object]:
+    """Main entrypoint: perform the full conversion based on config."""
     json_root = config.json_root
     media_roots = config.media_roots
     out_root = config.output_root
     scenes_dir = out_root / "scenes"
 
     log(f"JSON root: {json_root}")
-    for mr in media_roots:
-        log(f"Media root: {mr}")
+    for media_root in media_roots:
+        log(f"Media root: {media_root}")
     log(f"Output: {out_root}")
 
     if not json_root.exists() or not json_root.is_dir():
         raise ValueError("JSON root does not exist or is not a directory")
 
-    for mr in media_roots:
-        if not mr.exists() or not mr.is_dir():
-            raise ValueError(f"Media root does not exist or is not a directory: {mr}")
+    for media_root in media_roots:
+        if not media_root.exists() or not media_root.is_dir():
+            raise ValueError(f"Media root does not exist or is not a directory: {media_root}")
 
     out_root.mkdir(parents=True, exist_ok=True)
     if not config.dry_run:
@@ -406,7 +389,7 @@ def run_conversion(config: ConversionConfig, log: Callable[[str], None]) -> dict
 
     for path in downie_files:
         record = parse_downie_json(path)
-        if record:
+        if record is not None:
             downie_records.append(record)
         else:
             invalid_json.append(str(path.resolve()))
@@ -419,12 +402,12 @@ def run_conversion(config: ConversionConfig, log: Callable[[str], None]) -> dict
     index = MediaIndex()
     index.build_from_roots(media_roots, log=log)
 
-    matched: list[dict] = []
-    unmatched: list[dict] = []
-    ambiguous: list[dict] = []
+    matched: list[dict[str, object]] = []
+    unmatched: list[dict[str, object]] = []
+    ambiguous: list[dict[str, object]] = []
 
-    for i, record in enumerate(downie_records, start=1):
-        log(f"[{i}/{len(downie_records)}] Matching: {record.title_clean}")
+    for idx, record in enumerate(downie_records, start=1):
+        log(f"[{idx}/{len(downie_records)}] Matching: {record.title_clean}")
         candidates = find_candidates(index, record)
         best, issue, top_scored = choose_best_match(
             record,
@@ -433,8 +416,8 @@ def run_conversion(config: ConversionConfig, log: Callable[[str], None]) -> dict
             config.ambiguity_gap,
         )
 
-        if not best:
-            entry = {
+        if best is None:
+            entry: dict[str, object] = {
                 "json_path": record.json_path,
                 "title": record.title_clean,
                 "reason": issue or "no candidates",
@@ -456,6 +439,7 @@ def run_conversion(config: ConversionConfig, log: Callable[[str], None]) -> dict
             continue
 
         score, media, reasons = best
+        scene_url = record.referer or (record.media_url if config.allow_stream_url else None)
         payload = build_scene_payload(
             record,
             media,
@@ -463,10 +447,11 @@ def run_conversion(config: ConversionConfig, log: Callable[[str], None]) -> dict
             details_text=config.details_text,
             allow_stream_url=config.allow_stream_url,
         )
-        output_json = None
+
+        output_json: str | None = None
         if not config.dry_run:
-            fname = f"{sanitize_filename(record.title_clean)}.{i:05d}.json"
-            output_path = scenes_dir / fname
+            filename = f"{sanitize_filename(record.title_clean)}.{idx:05d}.json"
+            output_path = scenes_dir / filename
             output_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
@@ -480,21 +465,18 @@ def run_conversion(config: ConversionConfig, log: Callable[[str], None]) -> dict
                 reason="; ".join(reasons),
                 score=round(score, 2),
                 title=record.title_clean,
-                scene_url=payload.get("url"),
+                scene_url=scene_url,
                 video_path=media.path,
                 output_json=output_json,
                 candidate_count=len(candidates),
             )
         )
         matched.append(matched_entry)
-        log(
-            f"  -> MATCH: score={matched_entry['score']} "
-            f"file={media.path}"
-        )
+        log(f"  -> MATCH: score={matched_entry['score']} file={media.path}")
 
-    summary = {
+    summary: dict[str, object] = {
         "json_root": str(json_root.resolve()),
-        "media_roots": [str(p.resolve()) for p in media_roots],
+        "media_roots": [str(path.resolve()) for path in media_roots],
         "media_indexed": len(index.records),
         "downie_json_found": len(downie_files),
         "downie_json_parsed": len(downie_records),
