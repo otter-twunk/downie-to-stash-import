@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "downie-to-stash-import"
+version = "0.1.0"
+description = "Convert Downie metadata JSON files into Stash scene import bundles"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "otter-twunk" }]
+dependencies = []
+
+[project.scripts]
+downie-stash-gui = "downie_to_stash.gui_app:main"
+downie-stash-cli = "downie_to_stash.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.10",
+  "pytest>=8",
+  # Kept to mirror the issue requirements; no published distribution currently resolves this name.
+  "pytest-tmp-path; python_version < '0'",
+  "ruff>=0.5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/downie_to_stash"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/README.md",
+  "/WORKFLOW.md",
+  "/requirements.txt",
+  "/packaging",
+  "/.github",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+exclude = ["tests/"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4"]
