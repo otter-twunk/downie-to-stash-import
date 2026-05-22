@@ -41,6 +41,22 @@ def test_cli_dry_run(
     assert report["dry_run"] is True
 
 
+def test_cli_invalid_json_root_exits_cleanly(
+    tmp_media_root: Path, tmp_output_root: Path, tmp_path: Path
+) -> None:
+    code = cli.main(
+        [
+            "--json-root",
+            str(tmp_path / "does-not-exist"),
+            "--media-root",
+            str(tmp_media_root),
+            "--output",
+            str(tmp_output_root),
+        ]
+    )
+    assert code == 2
+
+
 def test_cli_path_map(
     tmp_json_root: Path, tmp_media_root: Path, tmp_output_root: Path
 ) -> None:

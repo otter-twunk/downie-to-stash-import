@@ -167,8 +167,9 @@ def _absolute_path(path: Path) -> str:
 def _join_target_path(target_root: str, relative_path: str) -> str:
     if relative_path == ".":
         return target_root
-    joiner = ntpath if "\\" in target_root and "/" not in target_root else posixpath
-    return joiner.join(target_root, relative_path)
+    if "\\" in target_root and "/" not in target_root:
+        return ntpath.join(target_root, relative_path)
+    return posixpath.join(target_root, relative_path)
 
 
 def apply_path_mappings(
@@ -181,6 +182,7 @@ def apply_path_mappings(
     normalized_path = os.path.normcase(os.path.normpath(path))
     mappings = sorted(path_mappings, key=lambda item: len(item[0]), reverse=True)
     for source_root, target_root in mappings:
+        source_root = _absolute_path(Path(source_root))
         normalized_source = os.path.normcase(os.path.normpath(source_root))
         try:
             if (

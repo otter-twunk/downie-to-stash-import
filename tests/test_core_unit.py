@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from downie_to_stash.core import (
     DownieRecord,
     MediaRecord,
@@ -110,4 +113,28 @@ def test_apply_path_mappings_rewrites_root() -> None:
             [("/Volumes/Media", "/data")],
         )
         == "/data/site/alpha.mp4"
+    )
+
+
+def test_apply_path_mappings_expands_user_in_source_root(monkeypatch) -> None:
+    monkeypatch.setenv("HOME", "/Users/tester")
+    assert (
+        apply_path_mappings(
+            "/Users/tester/Media/site/alpha.mp4",
+            [("~/Media", "/data")],
+        )
+        == "/data/site/alpha.mp4"
+    )
+
+
+def test_apply_path_mappings_normalizes_relative_source_root(tmp_path: Path) -> None:
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    video_path = media_root / "site" / "alpha.mp4"
+    video_path.parent.mkdir()
+    video_path.write_bytes(b"")
+
+    relative_source = os.path.relpath(media_root, Path.cwd())
+    assert apply_path_mappings(str(video_path), [(relative_source, "/data")]) == (
+        "/data/site/alpha.mp4"
     )
