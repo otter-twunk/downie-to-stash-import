@@ -74,9 +74,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Analyze only; do not write scene JSON files.",
     )
     parser.add_argument(
+        "--path-map",
+        action="append",
+        default=[],
+        metavar="SOURCE=TARGET",
+        help=(
+            "Rewrite matched media paths in exported scene JSON. "
+            "Useful when Stash sees the library at a different root, such as Docker."
+        ),
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true", help="Print all log lines."
     )
     return parser
+
+
+def _parse_path_mapping(value: str) -> tuple[str, str]:
+    source, separator, target = value.partition("=")
+    source = source.strip()
+    target = target.strip()
+    if not separator or not source or not target:
+        raise argparse.ArgumentTypeError(
+            f"Invalid --path-map value {value!r}. Expected SOURCE=TARGET."
+        )
+    return source, target
 
 
 def _render_summary_table(summary: dict[str, object]) -> str:
@@ -102,6 +123,10 @@ def _render_summary_table(summary: dict[str, object]) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    try:
+        path_mappings = [_parse_path_mapping(value) for value in args.path_map]
+    except argparse.ArgumentTypeError as error:
+        raise SystemExit(str(error)) from error
     config = ConversionConfig(
         json_root=Path(args.json_root),
         media_roots=[Path(path) for path in args.media_root],
@@ -112,6 +137,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         allow_stream_url=args.allow_stream_url,
         include_date=not args.no_date,
         dry_run=args.dry_run,
+        path_mappings=path_mappings,
     )
 
     def log(message: str) -> None:

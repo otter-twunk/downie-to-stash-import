@@ -44,6 +44,7 @@ if TK_IMPORT_ERROR is None:
             self.include_date_var = tk.BooleanVar(value=True)
             self.allow_stream_url_var = tk.BooleanVar(value=False)
             self.dry_run_var = tk.BooleanVar(value=False)
+            self.path_map_var = tk.StringVar()
 
             self.status_var = tk.StringVar(value="Idle")
             self.summary_matched_var = tk.StringVar(value="0")
@@ -140,6 +141,23 @@ if TK_IMPORT_ERROR is None:
                 text="Dry run (no scene JSON files)",
                 variable=self.dry_run_var,
             ).grid(row=2, column=0, sticky="w")
+            ttk.Label(opt_frame, text="Path remap:").grid(
+                row=3,
+                column=0,
+                sticky="w",
+                pady=(6, 0),
+            )
+            ttk.Entry(
+                opt_frame,
+                textvariable=self.path_map_var,
+            ).grid(
+                row=3,
+                column=1,
+                columnspan=2,
+                sticky="we",
+                padx=(20, 4),
+                pady=(6, 0),
+            )
             ttk.Label(opt_frame, text="Details text:").grid(
                 row=0,
                 column=1,
@@ -179,6 +197,10 @@ if TK_IMPORT_ERROR is None:
                 textvariable=self.ambiguity_gap_var,
                 width=6,
             ).grid(row=2, column=2, sticky="w")
+            ttk.Label(
+                opt_frame,
+                text="Optional SOURCE=TARGET for Docker or alternate library roots",
+            ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
             opt_frame.columnconfigure(2, weight=1)
 
             log_frame = ttk.Frame(main)
@@ -334,6 +356,19 @@ if TK_IMPORT_ERROR is None:
                     "Min score and ambiguity gap must be numbers.",
                 )
                 return None
+            path_map_value = self.path_map_var.get().strip()
+            path_mappings: list[tuple[str, str]] = []
+            if path_map_value:
+                source, separator, target = path_map_value.partition("=")
+                source = source.strip()
+                target = target.strip()
+                if not separator or not source or not target:
+                    messagebox.showerror(
+                        "Error",
+                        "Path remap must use SOURCE=TARGET format.",
+                    )
+                    return None
+                path_mappings.append((source, target))
 
             return ConversionConfig(
                 json_root=Path(json_root),
@@ -345,6 +380,7 @@ if TK_IMPORT_ERROR is None:
                 allow_stream_url=self.allow_stream_url_var.get(),
                 include_date=self.include_date_var.get(),
                 dry_run=self.dry_run_var.get(),
+                path_mappings=path_mappings,
             )
 
         def _set_running_state(self, running: bool) -> None:

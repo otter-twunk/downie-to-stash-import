@@ -3,6 +3,7 @@ from __future__ import annotations
 from downie_to_stash.core import (
     DownieRecord,
     MediaRecord,
+    apply_path_mappings,
     clean_title,
     extract_date,
     normalize_text,
@@ -30,6 +31,7 @@ def _downie(stem: str = "alpha scene", title: str = "Alpha Scene") -> DownieReco
 def _media(stem: str = "alpha scene") -> MediaRecord:
     return MediaRecord(
         path="/tmp/alpha scene.mp4",
+        stash_path="/tmp/alpha scene.mp4",
         stem=stem,
         stem_norm=normalize_text(stem),
         parent_name="lib",
@@ -99,3 +101,13 @@ def test_score_candidate_zero_for_mismatch() -> None:
         _downie(stem="zzzz", title="zzzz"), _media(stem="alpha scene")
     )
     assert score < 20
+
+
+def test_apply_path_mappings_rewrites_root() -> None:
+    assert (
+        apply_path_mappings(
+            "/Volumes/Media/site/alpha.mp4",
+            [("/Volumes/Media", "/data")],
+        )
+        == "/data/site/alpha.mp4"
+    )

@@ -39,3 +39,25 @@ def test_cli_dry_run(
     assert report_path.exists()
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["dry_run"] is True
+
+
+def test_cli_path_map(
+    tmp_json_root: Path, tmp_media_root: Path, tmp_output_root: Path
+) -> None:
+    cli.main(
+        [
+            "--json-root",
+            str(tmp_json_root),
+            "--media-root",
+            str(tmp_media_root),
+            "--output",
+            str(tmp_output_root),
+            "--path-map",
+            f"{tmp_media_root}=/data",
+        ]
+    )
+
+    report = json.loads((tmp_output_root / "report.json").read_text(encoding="utf-8"))
+    assert report["path_mappings"] == [
+        {"source": str(tmp_media_root), "target": "/data"}
+    ]

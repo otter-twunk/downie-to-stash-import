@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import json
+import ntpath
+import os
+import posixpath
 import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping
@@ -117,6 +120,7 @@ class DownieRecord:
 @dataclass
 class MediaRecord:
     path: str
+    stash_path: str
     stem: str
     stem_norm: str
     parent_name: str
@@ -136,6 +140,7 @@ class MatchResult:
     title: str
     scene_url: str | None
     video_path: str | None
+    source_video_path: str | None
     output_json: str | None
     candidate_count: int
 
@@ -151,6 +156,44 @@ class ConversionConfig:
     allow_stream_url: bool
     include_date: bool
     dry_run: bool
+    path_mappings: list[tuple[str, str]]
+
+
+def _absolute_path(path: Path) -> str:
+    """Return an absolute path without resolving symlinks."""
+    return os.path.abspath(os.fspath(path.expanduser()))
+
+
+def _join_target_path(target_root: str, relative_path: str) -> str:
+    if relative_path == ".":
+        return target_root
+    joiner = ntpath if "\\" in target_root and "/" not in target_root else posixpath
+    return joiner.join(target_root, relative_path)
+
+
+def apply_path_mappings(
+    path: str, path_mappings: list[tuple[str, str]] | None = None
+) -> str:
+    """Remap a media path into the path namespace Stash expects."""
+    if not path_mappings:
+        return path
+
+    normalized_path = os.path.normcase(os.path.normpath(path))
+    mappings = sorted(path_mappings, key=lambda item: len(item[0]), reverse=True)
+    for source_root, target_root in mappings:
+        normalized_source = os.path.normcase(os.path.normpath(source_root))
+        try:
+            if (
+                os.path.commonpath([normalized_path, normalized_source])
+                != normalized_source
+            ):
+                continue
+        except ValueError:
+            continue
+
+        relative_path = os.path.relpath(path, source_root)
+        return _join_target_path(target_root, relative_path)
+    return path
 
 
 class MediaIndex:
@@ -171,18 +214,25 @@ class MediaIndex:
             if len(token) >= 3:
                 self.by_tokens[token].append(record)
 
-    def build_from_roots(self, roots: list[Path], log: Callable[[str], None]) -> None:
+    def build_from_roots(
+        self,
+        roots: list[Path],
+        log: Callable[[str], None],
+        path_mappings: list[tuple[str, str]] | None = None,
+    ) -> None:
         for root in roots:
             log(f"Scanning media root: {root}")
             for path in root.rglob("*"):
                 if not path.is_file() or path.suffix.lower() not in VIDEO_EXTS:
                     continue
+                absolute_path = _absolute_path(path)
                 parent = path.parent.name
                 grandparent = (
                     path.parent.parent.name if path.parent.parent != path.parent else ""
                 )
                 record = MediaRecord(
-                    path=str(path.resolve()),
+                    path=absolute_path,
+                    stash_path=apply_path_mappings(absolute_path, path_mappings),
                     stem=path.stem,
                     stem_norm=normalize_text(path.stem),
                     parent_name=parent,
@@ -225,7 +275,7 @@ def parse_downie_json(path: Path) -> DownieRecord | None:
     )
 
     return DownieRecord(
-        json_path=str(path.resolve()),
+        json_path=_absolute_path(path),
         stem=path.stem,
         title_raw=title_raw,
         title_clean=title_clean,
@@ -329,7 +379,7 @@ def build_scene_payload(
     timestamp = _timestamp_now()
     payload: dict[str, object] = {
         "title": downie.title_clean,
-        "files": [matched_media.path],
+        "files": [matched_media.stash_path],
         "details": details_text,
         "created_at": timestamp,
         "updated_at": timestamp,
@@ -413,7 +463,7 @@ def run_conversion(
     for path in downie_files:
         record = parse_downie_json(path)
         if record is None:
-            invalid_json.append(str(path.resolve()))
+            invalid_json.append(_absolute_path(path))
             continue
         downie_records.append(record)
 
@@ -424,7 +474,7 @@ def run_conversion(
     )
 
     index = MediaIndex()
-    index.build_from_roots(media_roots, log=log)
+    index.build_from_roots(media_roots, log=log, path_mappings=config.path_mappings)
 
     matched: list[dict[str, object]] = []
     unmatched: list[dict[str, object]] = []
@@ -446,7 +496,8 @@ def run_conversion(
                 "top_candidates": [
                     {
                         "score": round(score, 2),
-                        "path": candidate.path,
+                        "path": candidate.stash_path,
+                        "source_path": candidate.path,
                         "reasons": reasons,
                     }
                     for score, candidate, reasons in top_scored
@@ -479,7 +530,7 @@ def run_conversion(
                 json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
-            output_json = str(output_path.resolve())
+            output_json = _absolute_path(output_path)
 
         matched.append(
             asdict(
@@ -490,18 +541,31 @@ def run_conversion(
                     score=round(score, 2),
                     title=record.title_clean,
                     scene_url=scene_url,
-                    video_path=media.path,
+                    video_path=media.stash_path,
+                    source_video_path=media.path,
                     output_json=output_json,
                     candidate_count=len(candidates),
                 )
             )
         )
-        log(f"  -> MATCH: score={round(score, 2)} file={media.path}")
+        if media.stash_path == media.path:
+            log(f"  -> MATCH: score={round(score, 2)} file={media.stash_path}")
+        else:
+            log(
+                "  -> MATCH: "
+                f"score={round(score, 2)} "
+                f"file={media.stash_path} "
+                f"(indexed from {media.path})"
+            )
 
     summary: dict[str, object] = {
-        "json_root": str(json_root.resolve()),
-        "media_roots": [str(path.resolve()) for path in media_roots],
-        "output_root": str(out_root.resolve()),
+        "json_root": _absolute_path(json_root),
+        "media_roots": [_absolute_path(path) for path in media_roots],
+        "output_root": _absolute_path(out_root),
+        "path_mappings": [
+            {"source": source, "target": target}
+            for source, target in config.path_mappings
+        ],
         "media_indexed": len(index.records),
         "downie_json_found": len(downie_files),
         "downie_json_parsed": len(downie_records),
@@ -529,6 +593,6 @@ def run_conversion(
         f"Unmatched={len(unmatched)}, "
         f"Ambiguous={len(ambiguous)}"
     )
-    log(f"Report: {(out_root / 'report.json').resolve()}")
+    log(f"Report: {_absolute_path(out_root / 'report.json')}")
 
     return summary

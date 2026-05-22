@@ -44,6 +44,7 @@ Important flags:
 - `--dry-run` analyzes only and skips writing `scenes/`
 - `--min-score` and `--ambiguity-gap` tune matching strictness
 - `--no-date` skips mapping Downie timestamps to scene dates
+- `--path-map /host/media=/data` rewrites exported `files` paths when Stash sees your library at a different root
 - `--verbose` or `-v` prints every log line
 - `--version` prints the app version and exits
 
@@ -80,3 +81,5 @@ Reference docs:
   - Confirm files use supported extensions in `VIDEO_EXTS` inside `src/downie_to_stash/core.py`.
 - **Import not working in Stash**
   - Ensure Stash has already scanned the media files before running the JSON import task.
+  - The exported `files` path must exactly match the path Stash indexed.
+  - If Stash runs in Docker or another container, use `--path-map`, for example `--path-map /Volumes/Media=/data`.
