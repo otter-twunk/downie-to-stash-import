@@ -20,8 +20,6 @@ downie-stash-cli = "downie_to_stash.cli:main"
 dev = [
   "mypy>=1.10",
   "pytest>=8",
-  # Kept to mirror the issue requirements; no published distribution currently resolves this name.
-  "pytest-tmp-path; python_version < '0'",
   "ruff>=0.5",
 ]
 

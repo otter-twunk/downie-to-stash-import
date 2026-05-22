@@ -8,7 +8,7 @@ rm -rf .venv-build
 python3 -m venv .venv-build
 source .venv-build/bin/activate
 python -m pip install --upgrade pip
-pip install -e ".[dev]"
+pip install -e .
 pip install pyinstaller
 
 pyinstaller packaging/downie_stash.spec

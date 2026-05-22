@@ -146,7 +146,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             print(message, flush=True)
 
-    summary = run_conversion(config, log=log)
+    try:
+        summary = run_conversion(config, log=log)
+    except ValueError as error:
+        print(f"Error: {error}", flush=True)
+        return 2
     print(_render_summary_table(summary), flush=True)
     has_issues = (
         _as_int(summary.get("unmatched_count", 0)) > 0
